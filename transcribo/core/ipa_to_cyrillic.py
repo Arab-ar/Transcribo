@@ -16,18 +16,14 @@ def ipa_to_cyrillic(ipa_text: str) -> str:
     if not ipa_text:
         return ""
     
-    # Приводим к нижнему регистру для замены
     text = ipa_text.lower()
     result = text
     
-    # Сортируем ключи по длине (чтобы сначала заменялись длинные звуки)
     sorted_keys = sorted(IPA_TO_RU.keys(), key=len, reverse=True)
     for ipa_sound in sorted_keys:
         result = result.replace(ipa_sound, IPA_TO_RU[ipa_sound])
     
-    # Убираем оставшийся мусор
     result = re.sub(r'[^а-яё\s\-]', '', result)
     result = re.sub(r'\s+', ' ', result).strip()
     
-    # Делаем первую букву заглавной
     return result.capitalize()

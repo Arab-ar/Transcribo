@@ -11,7 +11,6 @@ output_dir = Path("resources/dictionaries")
 output_dir.mkdir(parents=True, exist_ok=True)
 output_file = output_dir / "names.json"
 
-# В этот раз используем ссылку на полный датасет, чтобы было больше имен
 url = "https://huggingface.co/datasets/onomaverse/names/resolve/main/name-transliterations.csv"
 
 print("Скачиваем и читаем датасет Onomaverse (это может занять минуту)...")
@@ -27,10 +26,13 @@ df_ru = df[df['lang_code'] == 'ru']
 names_dict = {}
 for _, row in df_ru.iterrows():
     if pd.notna(row['name']) and pd.notna(row['localized_form']):
-        # Нормализуем ключ (beyoncé -> beyonce)
         clean_name = normalize_word(row['name'])
         if clean_name:
             names_dict[clean_name] = str(row['localized_form']).strip()
+
+# Принудительные исправления ошибок базы
+names_dict["muller"] = "мюллер"
+names_dict["beyonce"] = "бейонсе"
 
 print(f"Найдено уникальных имен с русской транслитерацией: {len(names_dict)}")
 

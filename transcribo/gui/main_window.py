@@ -27,19 +27,16 @@ class MainWindow(QMainWindow):
         self.resize(1000, 650)
         self.setAcceptDrops(True)
 
-        # 1. Путь к пользовательской базе
         app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         self.user_db_path = Path(app_data) / "vocabulary.db"
         self.dict_store = DatabaseStore(self.user_db_path)
 
-        # 2. Путь к базовой базе
         if hasattr(sys, '_MEIPASS'):
             base_path = Path(sys._MEIPASS)
         else:
             base_path = Path(__file__).parent.parent.parent
         self.base_db_path = base_path / "resources" / "base_vocabulary.db"
 
-        # 3. Инициализируем движок
         self.engine = TranscriptionEngine(
             base_db_path=self.base_db_path,
             user_db_path=self.user_db_path
@@ -48,7 +45,6 @@ class MainWindow(QMainWindow):
         self._is_refreshing_table = False
         self.worker = None
 
-        # 4. Строим интерфейс
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
@@ -61,7 +57,6 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Готово.")
         self.refresh_dictionary_table()
 
-    # ---------- Вкладка 1: Транскрипция ----------
     def _build_transcribe_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -107,7 +102,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, stretch=1)
         return tab
 
-    # ---------- Вкладка 2: Словарь ----------
     def _build_dictionary_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -142,14 +136,11 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.EditKeyPressed)
         self.table.itemChanged.connect(self.on_item_changed)
-        
-        # НОВОЕ: Подключаем клик по ячейке к нашей функции автозаполнения
         self.table.cellClicked.connect(self.on_table_cell_clicked)
         
         layout.addWidget(self.table)
         return tab
 
-    # ---------- Асинхронная транскрипция ----------
     def on_transcribe_clicked(self) -> None:
         text = self.input_edit.toPlainText().strip()
         if not text:
@@ -180,7 +171,6 @@ class MainWindow(QMainWindow):
         self.transcribe_button.setText("Транскрибировать →")
         self.statusBar().showMessage("Ошибка при обработке", 3000)
 
-    # ---------- Работа с файлами ----------
     def on_open_file_clicked(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(self, "Открыть файл", "", "Text Files (*.txt);;All Files (*)")
         if file_path:
@@ -199,7 +189,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл:\n{e}")
 
-    # ---------- Drag & Drop ----------
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
@@ -221,7 +210,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось прочитать файл:\n{e}")
 
-    # ---------- Логика словаря ----------
     def refresh_dictionary_table(self, filter_text: str = ""):
         self._is_refreshing_table = True
         
@@ -235,7 +223,6 @@ class MainWindow(QMainWindow):
         for row, entry in enumerate(entries):
             self.table.setItem(row, 0, QTableWidgetItem(entry.word))
             
-            # Конвертация IPA в кириллицу для отображения
             display_transcription = entry.transcription
             if display_transcription and any(c in display_transcription for c in "ˈˌæɒŋθðʃʒɜː"):
                 display_transcription = ipa_to_cyrillic(display_transcription)
@@ -251,7 +238,6 @@ class MainWindow(QMainWindow):
     def on_search_changed(self, text: str):
         self.refresh_dictionary_table(text)
 
-    # НОВЫЙ МЕТОД: Автозаполнение полей при клике на строку таблицы
     def on_table_cell_clicked(self, row: int, column: int):
         word_item = self.table.item(row, 0)
         transcription_item = self.table.item(row, 1)
@@ -274,6 +260,7 @@ class MainWindow(QMainWindow):
             return
 
         self.dict_store.add(word, new_transcription, source="user")
+        self.engine.add_user_word(word, new_transcription)  # Мгновенное обновление!
         self.statusBar().showMessage(f"Обновлено: {word} -> {new_transcription}", 3000)
 
     def on_add_word_clicked(self) -> None:
@@ -289,6 +276,8 @@ class MainWindow(QMainWindow):
             return
 
         self.dict_store.add(word, transcription, source="user")
+        self.engine.add_user_word(word, transcription)  # Мгновенное обновление!
+        
         self.refresh_dictionary_table(self.search_input.text())
         self.word_input.clear()
         self.transcription_input.clear()
