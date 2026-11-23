@@ -1,0 +1,26 @@
+[project]
+name = "transcribo"
+version = "0.1.0"
+description = "GUI-оболочка для практической транскрипции английского в русский"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.6",
+    "eng-to-ru-transcriber>=0.2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+transcribo = "transcribo.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["transcribo*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
