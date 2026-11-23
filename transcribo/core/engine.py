@@ -12,7 +12,6 @@ class TranscriptionEngine:
         self._transcriber = Transcriber()
         self._vocabulary = {} 
         
-        # Загружаем NLP-модель spaCy (если установлена)
         try:
             self.nlp = spacy.load("en_core_web_sm")
         except OSError:
@@ -73,7 +72,6 @@ class TranscriptionEngine:
                 processed_lines.append("")
                 continue
 
-            # Анализ именованных сущностей (NER) с помощью spaCy
             if self.nlp:
                 doc = self.nlp(clean_text)
                 entities = {}
@@ -89,7 +87,6 @@ class TranscriptionEngine:
 
             while i < len(words):
                 matched = False
-                # Ищем фразы до 5 слов
                 for length in range(min(5, len(words) - i), 0, -1):
                     phrase_words = words[i:i + length]
                     clean_phrase = " ".join(
@@ -102,6 +99,10 @@ class TranscriptionEngine:
                         if any(c in trans for c in "ˈˌæɒŋθðʃʒɜː"):
                             trans = ipa_to_cyrillic(trans)
                         
+                        # Безопасная капитализация (сохраняет заглавные внутри фразы)
+                        if trans:
+                            trans = trans[0].upper() + trans[1:]
+                            
                         result_parts.append(f"{trans} [{entry['source']}]")
                         i += length
                         matched = True
@@ -118,18 +119,25 @@ class TranscriptionEngine:
                         trans = entry["transcription"]
                         if any(c in trans for c in "ˈˌæɒŋθðʃʒɜː"):
                             trans = ipa_to_cyrillic(trans)
+                        
+                        if trans:
+                            trans = trans[0].upper() + trans[1:]
+                            
                         result_parts.append(f"{trans} [{entry['source']}]")
                     else:
-                        # Определяем тип сущности
                         entity_type = entities.get(clean_word, None)
                         
                         if entity_type in ['PERSON', 'ORG', 'GPE', 'LOC', 'PRODUCT']:
-                            # Для имен и брендов используем транслитерацию (игнорируем eng_to_ipa)
-                            trans = self._transcriber._apply_fallback_rules(clean_word)
+                            # Для имен используем Phonemizer/Транслитерацию
+                            trans = self._transcriber.transcribe(clean_word)
+                            if trans:
+                                trans = trans[0].upper() + trans[1:]
                             result_parts.append(f"{trans} [NER:{entity_type}]")
                         else:
-                            # Для обычных слов используем Phonemizer/Transcriber
+                            # Для обычных слов
                             trans = self._transcriber.transcribe(word)
+                            if trans:
+                                trans = trans[0].upper() + trans[1:]
                             result_parts.append(f"{trans} [transcriber]")
                     
                     i += 1
