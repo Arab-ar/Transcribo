@@ -1,6 +1,7 @@
 import re
 import sys
 import json
+import spacy
 from pathlib import Path
 from transcribo.core.database import DatabaseStore
 from transcribo.core.transcriber import Transcriber
@@ -9,8 +10,14 @@ from transcribo.core.ipa_to_cyrillic import ipa_to_cyrillic
 class TranscriptionEngine:
     def __init__(self, base_db_path: Path = None, user_db_path: Path = None):
         self._transcriber = Transcriber()
-        # Теперь тут хранится: {"слово": {"transcription": "...", "source": "..."}}
         self._vocabulary = {} 
+        
+        # Загружаем NLP-модель spaCy (если установлена)
+        try:
+            self.nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            print("ВНИМАНИЕ: Модель spaCy не найдена. Распознавание имен будет ограничено.")
+            self.nlp = None
 
         # 1. Базовая база (207к слов)
         if base_db_path and base_db_path.exists():
@@ -30,12 +37,10 @@ class TranscriptionEngine:
                 self._vocabulary[clean_k] = {"transcription": v, "source": "user"}
 
     def _load_external_dictionaries(self):
-        """Сканирует папку resources/dictionaries и загружает все JSON-файлы"""
         if hasattr(sys, '_MEIPASS'):
             base_path = Path(sys._MEIPASS)
         else:
             base_path = Path(__file__).parent.parent.parent
-            
         dict_dir = base_path / "resources" / "dictionaries"
         
         if not dict_dir.exists():
@@ -52,18 +57,13 @@ class TranscriptionEngine:
                 print(f"Ошибка загрузки {json_file.name}: {e}")
 
     def add_user_word(self, word: str, transcription: str):
-        """Добавляет слово в оперативную память для мгновенного применения"""
         clean_k = self._transcriber._normalize(word).lower()
         self._vocabulary[clean_k] = {"transcription": transcription, "source": "user"}
-
-    def _preprocess(self, text: str) -> str:
-        return text.strip()
 
     def transcribe(self, text: str) -> str:
         if not text.strip():
             return ""
         
-        # Сохраняем переносы строк
         lines = text.split('\n')
         processed_lines = []
 
@@ -73,13 +73,23 @@ class TranscriptionEngine:
                 processed_lines.append("")
                 continue
 
+            # Анализ именованных сущностей (NER) с помощью spaCy
+            if self.nlp:
+                doc = self.nlp(clean_text)
+                entities = {}
+                for ent in doc.ents:
+                    for token in ent:
+                        entities[token.text.lower()] = ent.label_
+            else:
+                entities = {}
+
             words = clean_text.split()
             result_parts = []
             i = 0
 
             while i < len(words):
                 matched = False
-                # Ищем фразы до 5 слов (для "Louis Vuitton" и т.д.)
+                # Ищем фразы до 5 слов
                 for length in range(min(5, len(words) - i), 0, -1):
                     phrase_words = words[i:i + length]
                     clean_phrase = " ".join(
@@ -89,7 +99,6 @@ class TranscriptionEngine:
                     if clean_phrase in self._vocabulary:
                         entry = self._vocabulary[clean_phrase]
                         trans = entry["transcription"]
-                        # Если это IPA, конвертируем
                         if any(c in trans for c in "ˈˌæɒŋθðʃʒɜː"):
                             trans = ipa_to_cyrillic(trans)
                         
@@ -111,8 +120,17 @@ class TranscriptionEngine:
                             trans = ipa_to_cyrillic(trans)
                         result_parts.append(f"{trans} [{entry['source']}]")
                     else:
-                        trans = self._transcriber.transcribe(word)
-                        result_parts.append(f"{trans} [transcriber]")
+                        # Определяем тип сущности
+                        entity_type = entities.get(clean_word, None)
+                        
+                        if entity_type in ['PERSON', 'ORG', 'GPE', 'LOC', 'PRODUCT']:
+                            # Для имен и брендов используем транслитерацию (игнорируем eng_to_ipa)
+                            trans = self._transcriber._apply_fallback_rules(clean_word)
+                            result_parts.append(f"{trans} [NER:{entity_type}]")
+                        else:
+                            # Для обычных слов используем Phonemizer/Transcriber
+                            trans = self._transcriber.transcribe(word)
+                            result_parts.append(f"{trans} [transcriber]")
                     
                     i += 1
 
