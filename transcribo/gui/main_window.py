@@ -24,21 +24,28 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Transcribo — English → Russian")
         self.resize(1000, 650)
-        self.setAcceptDrops(True)  # Включаем Drag & Drop для главного окна
+        self.setAcceptDrops(True)
 
-        # 1. Инициализируем хранилище (SQLite)
+        # 1. Путь к пользовательской базе (там, где ваши правки)
         app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-        self.db_path = Path(app_data) / "vocabulary.db"
-        self.dict_store = DatabaseStore(self.db_path)
+        self.user_db_path = Path(app_data) / "vocabulary.db"
+        self.dict_store = DatabaseStore(self.user_db_path)
 
-        # 2. Импортируем базовый словарь
-        self._import_base_vocabulary()
+        # 2. Путь к базовой базе (207 000 слов OpenEPD)
+        if hasattr(sys, '_MEIPASS'):
+            base_path = Path(sys._MEIPASS)
+        else:
+            base_path = Path(__file__).parent.parent.parent
+        self.base_db_path = base_path / "resources" / "base_vocabulary.db"
 
-        # 3. Инициализируем движок
-        self.engine = TranscriptionEngine(custom_vocabulary=self.dict_store.as_vocabulary())
+        # 3. Инициализируем движок (передаем ОБА пути!)
+        self.engine = TranscriptionEngine(
+            base_db_path=self.base_db_path,
+            user_db_path=self.user_db_path
+        )
 
         self._is_refreshing_table = False
-        self.worker = None  # Ссылка на фоновый поток
+        self.worker = None
 
         # 4. Строим интерфейс
         central = QWidget()
@@ -50,38 +57,19 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_dictionary_tab(), "Словарь")
         main_layout.addWidget(self.tabs)
 
-        self.statusBar().showMessage("Готово. Перетащите .txt файл в окно для загрузки.")
+        self.statusBar().showMessage("Готово.")
         self.refresh_dictionary_table()
-
-    def _import_base_vocabulary(self) -> None:
-        if hasattr(sys, '_MEIPASS'):
-            base_path = Path(sys._MEIPASS)
-        else:
-            base_path = Path(__file__).parent.parent.parent
-            
-        base_db_file = base_path / "resources" / "base_vocabulary.db"
-        
-        if base_db_file.exists():
-            base_store = DatabaseStore(base_db_file)
-            existing_words = {e.word for e in self.dict_store.get_all()}
-            for entry in base_store.get_all():
-                if entry.word not in existing_words:
-                    self.dict_store.add(entry.word, entry.transcription, source="auto")
 
     # ---------- Вкладка 1: Транскрипция ----------
     def _build_transcribe_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        
-        # Панель инструментов (Кнопки)
         button_row = QHBoxLayout()
         
         self.transcribe_button = QPushButton("Транскрибировать →")
         self.transcribe_button.clicked.connect(self.on_transcribe_clicked)
-        
         self.open_button = QPushButton("📂 Открыть .txt")
         self.open_button.clicked.connect(self.on_open_file_clicked)
-        
         self.save_button = QPushButton("💾 Сохранить результат")
         self.save_button.clicked.connect(self.on_save_file_clicked)
 
@@ -91,19 +79,15 @@ class MainWindow(QMainWindow):
         button_row.addStretch()
         layout.addLayout(button_row)
 
-        # Текстовые поля
         splitter = QSplitter(Qt.Orientation.Horizontal)
         
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.addWidget(QLabel("Английский текст (или перетащите файл сюда):"))
-        
         self.input_edit = QTextEdit()
         self.input_edit.setPlaceholderText("Введите или вставьте текст на английском...")
-        # ОТКЛЮЧАЕМ перехват файлов, чтобы работал Drag & Drop главного окна
         self.input_edit.setAcceptDrops(False) 
-        
         left_layout.addWidget(self.input_edit)
         splitter.addWidget(left)
 
@@ -111,13 +95,10 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(QLabel("Транскрипция:"))
-        
         self.output_edit = QTextEdit()
         self.output_edit.setReadOnly(True)
         self.output_edit.setPlaceholderText("Здесь появится результат...")
-        # ОТКЛЮЧАЕМ перехват файлов и для поля вывода
         self.output_edit.setAcceptDrops(False)
-        
         right_layout.addWidget(self.output_edit)
         splitter.addWidget(right)
 
@@ -130,7 +111,6 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
-        # Форма добавления
         form_layout = QHBoxLayout()
         self.word_input = QLineEdit()
         self.word_input.setPlaceholderText("Слово (на англ.)")
@@ -150,13 +130,11 @@ class MainWindow(QMainWindow):
         form_layout.addWidget(self.delete_button)
         layout.addLayout(form_layout)
 
-        # Поиск
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("🔍 Поиск по словарю...")
         self.search_input.textChanged.connect(self.on_search_changed)
         layout.addWidget(self.search_input)
 
-        # Таблица
         self.table = QTableWidget()
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["Слово", "Транскрипция", "Источник"])
@@ -242,24 +220,24 @@ class MainWindow(QMainWindow):
     # ---------- Логика словаря ----------
     def refresh_dictionary_table(self, filter_text: str = ""):
         self._is_refreshing_table = True
-        entries = self.dict_store.get_all()
+        
         if filter_text:
+            # При поиске смотрим в пользовательской базе
+            entries = self.dict_store.get_all()
             entries = [e for e in entries if filter_text.lower() in e.word.lower()]
+        else:
+            # Без поиска показываем только слова, добавленные вами (чтобы не вешать интерфейс)
+            entries = [e for e in self.dict_store.get_all() if e.source == "user"]
 
         self.table.setRowCount(len(entries))
         for row, entry in enumerate(entries):
             self.table.setItem(row, 0, QTableWidgetItem(entry.word))
             self.table.setItem(row, 1, QTableWidgetItem(entry.transcription))
-            
-            source_text = "Вы" if entry.source == "user" else "Авто"
-            source_item = QTableWidgetItem(source_text)
+            source_item = QTableWidgetItem("Вы")
             source_item.setFlags(source_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 2, source_item)
             
         self._is_refreshing_table = False
-
-    def update_engine_vocabulary(self):
-        self.engine.update_vocabulary(self.dict_store.as_vocabulary())
 
     def on_search_changed(self, text: str):
         self.refresh_dictionary_table(text)
@@ -278,12 +256,6 @@ class MainWindow(QMainWindow):
             return
 
         self.dict_store.add(word, new_transcription, source="user")
-        self.update_engine_vocabulary()
-        
-        self._is_refreshing_table = True
-        self.table.setItem(row, 2, QTableWidgetItem("Вы"))
-        self._is_refreshing_table = False
-        
         self.statusBar().showMessage(f"Обновлено: {word} -> {new_transcription}", 3000)
 
     def on_add_word_clicked(self) -> None:
@@ -300,8 +272,6 @@ class MainWindow(QMainWindow):
 
         self.dict_store.add(word, transcription, source="user")
         self.refresh_dictionary_table(self.search_input.text())
-        self.update_engine_vocabulary()
-
         self.word_input.clear()
         self.transcription_input.clear()
         self.word_input.setFocus()
@@ -316,5 +286,4 @@ class MainWindow(QMainWindow):
         word = self.table.item(selected_row, 0).text()
         self.dict_store.remove(word)
         self.refresh_dictionary_table(self.search_input.text())
-        self.update_engine_vocabulary()
         self.statusBar().showMessage(f"Слово '{word}' удалено", 3000)
