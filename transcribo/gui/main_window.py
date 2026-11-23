@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from transcribo.core.engine import TranscriptionEngine
 from transcribo.core.database import DatabaseStore
 from transcribo.core.worker import TranscriptionWorker
+from transcribo.core.ipa_to_cyrillic import ipa_to_cyrillic
 
 
 class MainWindow(QMainWindow):
@@ -26,19 +27,19 @@ class MainWindow(QMainWindow):
         self.resize(1000, 650)
         self.setAcceptDrops(True)
 
-        # 1. Путь к пользовательской базе (там, где ваши правки)
+        # 1. Путь к пользовательской базе
         app_data = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
         self.user_db_path = Path(app_data) / "vocabulary.db"
         self.dict_store = DatabaseStore(self.user_db_path)
 
-        # 2. Путь к базовой базе (207 000 слов OpenEPD)
+        # 2. Путь к базовой базе
         if hasattr(sys, '_MEIPASS'):
             base_path = Path(sys._MEIPASS)
         else:
             base_path = Path(__file__).parent.parent.parent
         self.base_db_path = base_path / "resources" / "base_vocabulary.db"
 
-        # 3. Инициализируем движок (передаем ОБА пути!)
+        # 3. Инициализируем движок
         self.engine = TranscriptionEngine(
             base_db_path=self.base_db_path,
             user_db_path=self.user_db_path
@@ -142,6 +143,9 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.EditKeyPressed)
         self.table.itemChanged.connect(self.on_item_changed)
         
+        # НОВОЕ: Подключаем клик по ячейке к нашей функции автозаполнения
+        self.table.cellClicked.connect(self.on_table_cell_clicked)
+        
         layout.addWidget(self.table)
         return tab
 
@@ -222,17 +226,22 @@ class MainWindow(QMainWindow):
         self._is_refreshing_table = True
         
         if filter_text:
-            # При поиске смотрим в пользовательской базе
             entries = self.dict_store.get_all()
             entries = [e for e in entries if filter_text.lower() in e.word.lower()]
         else:
-            # Без поиска показываем только слова, добавленные вами (чтобы не вешать интерфейс)
             entries = [e for e in self.dict_store.get_all() if e.source == "user"]
 
         self.table.setRowCount(len(entries))
         for row, entry in enumerate(entries):
             self.table.setItem(row, 0, QTableWidgetItem(entry.word))
-            self.table.setItem(row, 1, QTableWidgetItem(entry.transcription))
+            
+            # Конвертация IPA в кириллицу для отображения
+            display_transcription = entry.transcription
+            if display_transcription and any(c in display_transcription for c in "ˈˌæɒŋθðʃʒɜː"):
+                display_transcription = ipa_to_cyrillic(display_transcription)
+                
+            self.table.setItem(row, 1, QTableWidgetItem(display_transcription))
+            
             source_item = QTableWidgetItem("Вы")
             source_item.setFlags(source_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 2, source_item)
@@ -241,6 +250,15 @@ class MainWindow(QMainWindow):
 
     def on_search_changed(self, text: str):
         self.refresh_dictionary_table(text)
+
+    # НОВЫЙ МЕТОД: Автозаполнение полей при клике на строку таблицы
+    def on_table_cell_clicked(self, row: int, column: int):
+        word_item = self.table.item(row, 0)
+        transcription_item = self.table.item(row, 1)
+        
+        if word_item and transcription_item:
+            self.word_input.setText(word_item.text())
+            self.transcription_input.setText(transcription_item.text())
 
     def on_item_changed(self, item: QTableWidgetItem):
         if self._is_refreshing_table or item.column() != 1:
@@ -263,7 +281,7 @@ class MainWindow(QMainWindow):
         transcription = self.transcription_input.text().strip()
 
         if not word or not transcription:
-            QMessageBox.warning(self, "Ошибка", "Заполните оба поля!")
+            QMessageBox.warning(self, "Ошибка", "Заполните оба поля! (Или кликните по слову в таблице)")
             return
             
         if re.search(r'[а-яА-ЯёЁ]', word):
@@ -275,7 +293,7 @@ class MainWindow(QMainWindow):
         self.word_input.clear()
         self.transcription_input.clear()
         self.word_input.setFocus()
-        self.statusBar().showMessage(f"Слово '{word}' добавлено", 3000)
+        self.statusBar().showMessage(f"Слово '{word}' добавлено в личный словарь", 3000)
 
     def on_delete_word_clicked(self) -> None:
         selected_row = self.table.currentRow()
