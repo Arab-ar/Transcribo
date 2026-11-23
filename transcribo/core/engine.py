@@ -15,20 +15,16 @@ class TranscriptionEngine:
         try:
             self.nlp = spacy.load("en_core_web_sm")
         except OSError:
-            print("ВНИМАНИЕ: Модель spaCy не найдена. Распознавание имен будет ограничено.")
             self.nlp = None
 
-        # 1. Базовая база (207к слов)
         if base_db_path and base_db_path.exists():
             base_store = DatabaseStore(base_db_path)
             for k, v in base_store.as_vocabulary().items():
                 clean_k = self._transcriber._normalize(k).lower()
                 self._vocabulary[clean_k] = {"transcription": v, "source": "base"}
 
-        # 2. Внешние словари (имена, бренды)
         self._load_external_dictionaries()
 
-        # 3. Пользовательская база (самый высокий приоритет)
         if user_db_path and user_db_path.exists():
             user_store = DatabaseStore(user_db_path)
             for k, v in user_store.as_vocabulary().items():
@@ -87,19 +83,25 @@ class TranscriptionEngine:
 
             while i < len(words):
                 matched = False
-                for length in range(min(5, len(words) - i), 0, -1):
+                
+                # Ограничиваем поиск фраз до 3 слов (чтобы избежать багов с длинными именами)
+                max_len = min(3, len(words) - i)
+                for length in range(max_len, 0, -1):
                     phrase_words = words[i:i + length]
                     clean_phrase = " ".join(
                         self._transcriber._normalize(re.sub(r'[^\w\s\'-]', '', w)).lower() for w in phrase_words
                     )
                     
+                    # Пропускаем пустые фразы
+                    if not clean_phrase.strip():
+                        continue
+                        
                     if clean_phrase in self._vocabulary:
                         entry = self._vocabulary[clean_phrase]
                         trans = entry["transcription"]
                         if any(c in trans for c in "ˈˌæɒŋθðʃʒɜː"):
                             trans = ipa_to_cyrillic(trans)
                         
-                        # Безопасная капитализация (сохраняет заглавные внутри фразы)
                         if trans:
                             trans = trans[0].upper() + trans[1:]
                             
@@ -128,13 +130,11 @@ class TranscriptionEngine:
                         entity_type = entities.get(clean_word, None)
                         
                         if entity_type in ['PERSON', 'ORG', 'GPE', 'LOC', 'PRODUCT']:
-                            # Для имен используем Phonemizer/Транслитерацию
                             trans = self._transcriber.transcribe(clean_word)
                             if trans:
                                 trans = trans[0].upper() + trans[1:]
                             result_parts.append(f"{trans} [NER:{entity_type}]")
                         else:
-                            # Для обычных слов
                             trans = self._transcriber.transcribe(word)
                             if trans:
                                 trans = trans[0].upper() + trans[1:]
